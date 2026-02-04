@@ -21,6 +21,18 @@ import { AppState } from './auth0-provider';
 
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface LogoutOptions extends Omit<SPALogoutOptions, 'onRedirect'> {}
+/**
+ * Options for loginWithRedirect.
+ * 
+ * **Else Workspace Support:**
+ * When running in an Else workspace, the following happens automatically:
+ * - If `authorizationParams.state` is provided, it will be wrapped with Else routing information
+ * - If `authorizationParams.state` is not provided, a random state will be generated and wrapped
+ * - `authorizationParams.redirect_uri` will be replaced with Else's callback URL
+ * - The redirect will use Else's redirect helper (handles iframe context)
+ * 
+ * The wrapped state is forwarded to the callback (forwardWrappedState=true) so the SDK can validate it.
+ */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface RedirectLoginOptions<TAppState = AppState>
   extends Omit<SPARedirectLoginOptions<TAppState>, 'onRedirect'> {}
@@ -129,6 +141,17 @@ export interface Auth0ContextInterface<TUser extends User = User>
    * Performs a redirect to `/authorize` using the parameters
    * provided as arguments. Random and secure `state` and `nonce`
    * parameters will be auto-generated.
+   * 
+   * **Else Workspace Support:**
+   * When running in an Else workspace environment, this method automatically:
+   * - Wraps the OAuth state with Else routing information
+   * - Uses Else's callback URL instead of the app's callback URL
+   * - Handles iframe redirects using Else's redirect helper
+   * 
+   * The state parameter (if provided in `authorizationParams.state`) will be wrapped
+   * with routing information. If not provided, a random state will be generated and wrapped.
+   * The wrapped state is forwarded to the callback (forwardWrappedState=true) so the SDK
+   * can validate it correctly.
    */
   loginWithRedirect: (
     options?: RedirectLoginOptions<AppState>
