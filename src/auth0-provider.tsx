@@ -96,6 +96,12 @@ export interface Auth0ProviderOptions<TUser extends User = User> extends Auth0Cl
    */
   skipRedirectCallback?: boolean;
   /**
+   * Else SSO mode:
+   * - "static_redirect" (default): route login via Nexus callback + wrapped state
+   * - "direct": use app-origin redirect_uri and skip state wrapping
+   */
+  elseSsoMode?: 'static_redirect' | 'direct';
+  /**
    * Context to be used when creating the Auth0Provider, defaults to the internally created context.
    *
    * This allows multiple Auth0Providers to be nested within the same application, the context value can then be
@@ -129,8 +135,11 @@ const toAuth0ClientOptions = (
 ): Auth0ClientOptions => {
   deprecateRedirectUri(opts);
 
+  const { elseSsoMode: _elseSsoMode, ...clientOptions } = opts;
+  void _elseSsoMode;
+
   return {
-    ...opts,
+    ...clientOptions,
     auth0Client: {
       name: 'auth0-react',
       version: __VERSION__,
@@ -167,11 +176,14 @@ const Auth0Provider = <TUser extends User = User>(opts: Auth0ProviderOptions<TUs
     skipRedirectCallback,
     onRedirectCallback = defaultOnRedirectCallback,
     context = Auth0Context,
+    elseSsoMode = 'static_redirect',
     ...clientOpts
   } = opts;
   
-  // Override redirect_uri if running in Else workspace and SDK is available
-  // Check both immediately and in a way that handles async SDK loading
+  // Detect Else workspace SDK if available
+  // We intentionally do NOT override redirect_uri at client initialization.
+  // Silent auth (prompt=none, web_message) requires the app origin to receive
+  // the postMessage callback; overriding to the SSO router breaks that flow.
   const elseWindow = window as typeof window & ElseWindowExtensions;
   const checkElseWorkspace = () => typeof window !== 'undefined' && 
     typeof elseWindow.__elseWrapAuthState === 'function' &&
@@ -179,29 +191,12 @@ const Auth0Provider = <TUser extends User = User>(opts: Auth0ProviderOptions<TUs
   
   const isElseWorkspace = checkElseWorkspace();
   
-  // Override redirect_uri during initialization if SDK is already available
-  // Create a new object instead of reassigning to avoid const error
+  // Keep client options untouched; interactive flows override redirect_uri later.
   const finalClientOpts = (() => {
-    if (isElseWorkspace && clientOpts.authorizationParams?.redirect_uri) {
-      try {
-        const elseCallbackUrl = elseWindow.__elseGetSSOCallbackUrl!();
-        // Override redirect_uri with Else's callback URL during initialization
-        // This ensures Auth0Client uses the correct URL for all operations
-        console.log('[Auth0 React SDK] ✅ Using Else workspace callback URL:', elseCallbackUrl);
-        return {
-          ...clientOpts,
-          authorizationParams: {
-            ...clientOpts.authorizationParams,
-            redirect_uri: elseCallbackUrl
-          }
-        };
-      } catch (error) {
-        console.warn('[Auth0 React SDK] ⚠️ Failed to get Else callback URL during initialization:', error);
-      }
-    } else if (typeof window !== 'undefined' && elseWindow.ELSE_DEV_ENVIRONMENT && !isElseWorkspace) {
+    if (typeof window !== 'undefined' && elseWindow.ELSE_DEV_ENVIRONMENT && !isElseWorkspace) {
       // SDK env vars are set but SDK functions aren't available yet (async loading)
       console.warn('[Auth0 React SDK] ⚠️ Else workspace detected (ELSE_DEV_ENVIRONMENT=true) but SDK functions not yet available.');
-      console.warn('[Auth0 React SDK] ⚠️ redirect_uri will be overridden in loginWithRedirect when SDK loads.');
+      console.warn('[Auth0 React SDK] ⚠️ loginWithRedirect will override redirect_uri when SDK loads.');
     }
     return clientOpts;
   })();
@@ -308,9 +303,7 @@ const Auth0Provider = <TUser extends User = User>(opts: Auth0ProviderOptions<TUs
   useEffect(() => {
     if (!isElseWorkspace && checkElseWorkspace()) {
       // SDK became available after initialization - log warning
-      // The redirect_uri will still be overridden in loginWithRedirect, but
-      // silent auth operations might use the wrong URL until next page load
-      console.warn('[Auth0 React SDK] Else workspace SDK loaded after Auth0Provider initialization. Some operations may use incorrect redirect_uri until page reload.');
+      console.warn('[Auth0 React SDK] Else workspace SDK loaded after Auth0Provider initialization. loginWithRedirect will override redirect_uri on demand.');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -378,6 +371,29 @@ const Auth0Provider = <TUser extends User = User>(opts: Auth0ProviderOptions<TUs
       }
 
       if (isElseWorkspaceNow) {
+        if (elseSsoMode === 'direct') {
+          console.log('[Auth0 React SDK] ✅ Else workspace detected in loginWithRedirect (direct mode)');
+          const modifiedOpts: RedirectLoginOptions = opts ? { ...opts } : {};
+          if (!modifiedOpts.authorizationParams) {
+            modifiedOpts.authorizationParams = {};
+          } else {
+            modifiedOpts.authorizationParams = { ...modifiedOpts.authorizationParams };
+          }
+
+          const originalOpenUrl = modifiedOpts.openUrl;
+          modifiedOpts.openUrl = async (url: string) => {
+            if (typeof elseWindow.__elseRedirectTopPage === 'function') {
+              elseWindow.__elseRedirectTopPage(url);
+            } else if (originalOpenUrl) {
+              await originalOpenUrl(url);
+            } else {
+              window.location.href = url;
+            }
+          };
+
+          return client.loginWithRedirect(modifiedOpts);
+        }
+
         console.log('[Auth0 React SDK] ✅ Else workspace detected in loginWithRedirect, overriding redirect_uri');
         // Clone options to avoid mutating the original
         const modifiedOpts: RedirectLoginOptions = opts ? { ...opts } : {};
@@ -533,7 +549,7 @@ const Auth0Provider = <TUser extends User = User>(opts: Auth0ProviderOptions<TUs
       // Not in Else workspace - use normal flow
       return client.loginWithRedirect(opts);
     },
-    [client, clientOpts]
+    [client, clientOpts, elseSsoMode]
   );
 
   const loginWithPopup = useCallback(

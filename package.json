@@ -1,6 +1,6 @@
 {
   "name": "@elsedev/auth0-react",
-  "version": "2.12.8",
+  "version": "2.12.10",
   "description": "Auth0 SDK for React Single Page Applications (SPA)",
   "keywords": [
     "auth0",
